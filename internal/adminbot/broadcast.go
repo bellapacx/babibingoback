@@ -12,147 +12,134 @@ import (
 	"github.com/mymmrac/telego"
 )
 
-// handleBroadcast - Send broadcast to all main bot users
+// handleBroadcast - Start broadcast flow
 func (b *Bot) handleBroadcast(ctx context.Context, chatID int64, args []string) {
-	if len(args) == 0 {
-		b.sendMarkdown(ctx, chatID,
-			"📢 *Broadcast System*\n\n"+
-				"Send a message to ALL main bot users.\n\n"+
-				"Usage: `/broadcast <message>`\n\n"+
-				"📌 Examples:\n"+
-				"• `/broadcast 🎉 Special promotion!`\n"+
-				"• `/broadcast 📢 System maintenance at 2 AM`\n\n"+
-				"🧪 *Test Mode:*\n"+
-				"• `/broadcast test <message>` - Send test to yourself only\n\n"+
-				"⚠️ *Important:*\n"+
-				"• Message will be sent to ALL users\n"+
-				"• You will receive a confirmation report\n"+
-				"• Type `/broadcast cancel` to cancel")
-		return
-	}
-
-	// Check for cancel
-	if args[0] == "cancel" {
+	if len(args) > 0 && args[0] == "cancel" {
 		b.tempState.Delete(chatID)
 		b.sendText(ctx, chatID, "❌ Broadcast cancelled.")
 		return
 	}
 
-	// Check for test mode
-	if args[0] == "test" {
-		if len(args) < 2 {
-			b.sendText(ctx, chatID, "❌ Please provide a test message.\n\nExample: `/broadcast test Hello!`")
+	// Check if there's a pending broadcast
+	if _, ok := b.tempState.Load(chatID); ok {
+		b.sendText(ctx, chatID, "⚠️ You already have a pending broadcast.\nType `/broadcast cancel` to cancel it.")
+		return
+	}
+
+	// Ask for the message
+	b.sendMarkdown(ctx, chatID,
+		"📢 *Send Broadcast*\n\n"+
+			"Please type the message you want to send to ALL users.\n\n"+
+			"📌 You can use emojis and formatting.\n\n"+
+			"⌨️ Type your message below:\n"+
+			"• Type `/broadcast cancel` to cancel")
+	
+	b.tempState.Store(chatID, "awaiting_broadcast_message")
+}
+
+// handleBroadcastMessageInput - Handle the message input from admin
+func (b *Bot) handleBroadcastMessageInput(ctx context.Context, chatID int64, text string) {
+	// Check if it's a command
+	if strings.HasPrefix(text, "/") {
+		if text == "/broadcast cancel" {
+			b.tempState.Delete(chatID)
+			b.sendText(ctx, chatID, "❌ Broadcast cancelled.")
 			return
 		}
-		message := strings.Join(args[1:], " ")
-		b.sendTestBroadcast(ctx, chatID, message)
+		b.sendText(ctx, chatID, "❌ Invalid input. Please type a message or `/broadcast cancel`.")
 		return
 	}
 
-	message := strings.Join(args, " ")
+	// Store the message
+	message := text
+	b.tempState.Store(chatID, fmt.Sprintf("broadcast_pending_%s", message))
 
-	// Show preview and ask for confirmation
-	previewText := fmt.Sprintf(
+	// Show preview with buttons
+	b.showBroadcastPreview(ctx, chatID, message)
+}
+
+// showBroadcastPreview - Show broadcast preview with buttons
+func (b *Bot) showBroadcastPreview(ctx context.Context, chatID int64, message string) {
+	totalUsers := b.getTotalUsers()
+	
+	text := fmt.Sprintf(
 		"📢 *Broadcast Preview*\n\n"+
 			"📝 Message:\n%s\n\n"+
-			"⚠️ This will be sent to ALL main bot users.\n"+
-			"Type `/broadcast confirm` to send or `/broadcast cancel` to cancel.\n\n"+
 			"📊 Total Users: %d\n\n"+
-			"🧪 To test first: `/broadcast test %s`",
+			"⚠️ This will be sent to ALL main bot users.\n\n"+
+			"Choose an action below:",
 		escapeMarkdown(message),
-		b.getTotalUsers(),
-		escapeMarkdown(message),
+		totalUsers,
 	)
 
-	b.sendMarkdown(ctx, chatID, previewText)
-	b.tempState.Store(chatID, fmt.Sprintf("broadcast_pending_%s", message))
+	keyboard := [][]telego.InlineKeyboardButton{
+		{
+			{Text: "✅ Confirm & Send", CallbackData: "broadcast_confirm"},
+			{Text: "🧪 Send Test", CallbackData: "broadcast_test"},
+		},
+		{
+			{Text: "✏️ Edit Message", CallbackData: "broadcast_edit"},
+			{Text: "❌ Cancel", CallbackData: "broadcast_cancel"},
+		},
+	}
+
+	b.sendMarkdownKeyboard(ctx, chatID, text, keyboard)
 }
 
-// sendTestBroadcast - Send test broadcast to the admin only
-func (b *Bot) sendTestBroadcast(ctx context.Context, chatID int64, message string) {
-	// Create main bot API using main bot token
-	mainBotAPI, err := telego.NewBot(b.cfg.BotToken)
-	if err != nil {
-		b.sendText(ctx, chatID, fmt.Sprintf("❌ Failed to initialize main bot: %v", err))
-		return
-	}
-
-	// Get main bot info
-	mainBot, err := mainBotAPI.GetMe(ctx)
-	if err != nil {
-		b.sendText(ctx, chatID, fmt.Sprintf("❌ Failed to get main bot info: %v", err))
-		return
-	}
-
-	// Send test message to the admin only - using plain text to avoid parsing issues
-	_, err = mainBotAPI.SendMessage(ctx, &telego.SendMessageParams{
-		ChatID: telego.ChatID{ID: chatID},
-		Text: fmt.Sprintf("🧪 TEST BROADCAST\n\n%s\n\n— @%s Admin", 
-			message, 
-			mainBot.Username),
-		// No ParseMode to avoid Markdown errors
-	})
-
-	if err != nil {
-		b.sendText(ctx, chatID, fmt.Sprintf("❌ Test broadcast failed: %v", err))
-		return
-	}
-
-	b.sendMarkdown(ctx, chatID, fmt.Sprintf(
-		"✅ *Test Broadcast Sent*\n\n"+
-			"📝 Message sent to you only:\n%s\n\n"+
-			"📊 If the test looks good, send the broadcast to all users:\n"+
-			"`/broadcast confirm`",
-		escapeMarkdown(message),
-	))
-}
-
-// handleBroadcastConfirm - Confirm and send broadcast
+// handleBroadcastConfirm - Handle broadcast confirmation
 func (b *Bot) handleBroadcastConfirm(ctx context.Context, chatID int64) {
-	// Get pending broadcast
 	state, ok := b.tempState.Load(chatID)
 	if !ok {
-		b.sendText(ctx, chatID, "❌ No pending broadcast found. Use `/broadcast <message>` first.")
+		b.sendText(ctx, chatID, "❌ No pending broadcast found. Use `/broadcast` first.")
 		return
 	}
 
 	stateStr := state.(string)
 	if !strings.HasPrefix(stateStr, "broadcast_pending_") {
-		b.sendText(ctx, chatID, "❌ Invalid state. Use `/broadcast <message>` first.")
+		b.sendText(ctx, chatID, "❌ Invalid state. Use `/broadcast` first.")
 		return
 	}
 
 	message := strings.TrimPrefix(stateStr, "broadcast_pending_")
-
-	// Ask for final confirmation with number of users
 	totalUsers := b.getTotalUsers()
-	b.sendMarkdown(ctx, chatID, fmt.Sprintf(
+
+	text := fmt.Sprintf(
 		"📢 *Final Confirmation*\n\n"+
 			"⚠️ You are about to send a broadcast to **%d** users.\n\n"+
 			"📝 Message:\n%s\n\n"+
-			"Type `/broadcast send` to confirm and send, or `/broadcast cancel` to cancel.",
+			"Are you sure you want to send this broadcast?",
 		totalUsers,
 		escapeMarkdown(message),
-	))
-	b.tempState.Store(chatID, fmt.Sprintf("broadcast_ready_%s", message))
+	)
+
+	keyboard := [][]telego.InlineKeyboardButton{
+		{
+			{Text: "🚀 Send Now", CallbackData: "broadcast_send"},
+			{Text: "❌ Cancel", CallbackData: "broadcast_cancel"},
+		},
+	}
+
+	b.sendMarkdownKeyboard(ctx, chatID, text, keyboard)
 }
 
 // handleBroadcastSend - Send the broadcast
 func (b *Bot) handleBroadcastSend(ctx context.Context, chatID int64) {
-	// Get pending broadcast
 	state, ok := b.tempState.Load(chatID)
 	if !ok {
-		b.sendText(ctx, chatID, "❌ No broadcast ready. Use `/broadcast <message>` first.")
+		b.sendText(ctx, chatID, "❌ No broadcast ready. Use `/broadcast` first.")
 		return
 	}
 
 	stateStr := state.(string)
-	if !strings.HasPrefix(stateStr, "broadcast_ready_") {
-		b.sendText(ctx, chatID, "❌ Invalid state. Use `/broadcast <message>` first.")
+	if !strings.HasPrefix(stateStr, "broadcast_ready_") && !strings.HasPrefix(stateStr, "broadcast_pending_") {
+		b.sendText(ctx, chatID, "❌ Invalid state. Use `/broadcast` first.")
 		return
 	}
 
 	message := strings.TrimPrefix(stateStr, "broadcast_ready_")
+	if message == stateStr {
+		message = strings.TrimPrefix(stateStr, "broadcast_pending_")
+	}
 
 	// Start broadcast
 	b.sendMarkdown(ctx, chatID, fmt.Sprintf(
@@ -168,7 +155,95 @@ func (b *Bot) handleBroadcastSend(ctx context.Context, chatID int64) {
 	b.tempState.Delete(chatID)
 }
 
-// getTotalUsers - Get total number of users in main bot
+// handleBroadcastTest - Send test broadcast
+func (b *Bot) handleBroadcastTest(ctx context.Context, chatID int64) {
+	state, ok := b.tempState.Load(chatID)
+	if !ok {
+		b.sendText(ctx, chatID, "❌ No pending broadcast found. Use `/broadcast` first.")
+		return
+	}
+
+	stateStr := state.(string)
+	if !strings.HasPrefix(stateStr, "broadcast_pending_") {
+		b.sendText(ctx, chatID, "❌ Invalid state. Use `/broadcast` first.")
+		return
+	}
+
+	message := strings.TrimPrefix(stateStr, "broadcast_pending_")
+	b.sendTestBroadcast(ctx, chatID, message)
+}
+
+// handleBroadcastEdit - Edit the broadcast message
+func (b *Bot) handleBroadcastEdit(ctx context.Context, chatID int64) {
+	b.sendMarkdown(ctx, chatID,
+		"✏️ *Edit Broadcast Message*\n\n"+
+			"Please type the new message:\n\n"+
+			"📌 Type `/broadcast cancel` to cancel")
+	
+	b.tempState.Store(chatID, "awaiting_broadcast_edit")
+}
+
+// handleBroadcastEditInput - Handle edited message input
+func (b *Bot) handleBroadcastEditInput(ctx context.Context, chatID int64, text string) {
+	if strings.HasPrefix(text, "/") {
+		if text == "/broadcast cancel" {
+			b.tempState.Delete(chatID)
+			b.sendText(ctx, chatID, "❌ Broadcast cancelled.")
+			return
+		}
+		b.sendText(ctx, chatID, "❌ Invalid input. Please type a message or `/broadcast cancel`.")
+		return
+	}
+
+	// Update the message
+	message := text
+	b.tempState.Store(chatID, fmt.Sprintf("broadcast_pending_%s", message))
+
+	// Show updated preview
+	b.showBroadcastPreview(ctx, chatID, message)
+}
+
+// handleBroadcastCancel - Cancel broadcast
+func (b *Bot) handleBroadcastCancel(ctx context.Context, chatID int64) {
+	b.tempState.Delete(chatID)
+	b.sendText(ctx, chatID, "❌ Broadcast cancelled.")
+}
+
+// sendTestBroadcast - Send test broadcast to admin only
+func (b *Bot) sendTestBroadcast(ctx context.Context, chatID int64, message string) {
+	mainBotAPI, err := telego.NewBot(b.cfg.BotToken)
+	if err != nil {
+		b.sendText(ctx, chatID, fmt.Sprintf("❌ Failed to initialize main bot: %v", err))
+		return
+	}
+
+	mainBot, err := mainBotAPI.GetMe(ctx)
+	if err != nil {
+		b.sendText(ctx, chatID, fmt.Sprintf("❌ Failed to get main bot info: %v", err))
+		return
+	}
+
+	_, err = mainBotAPI.SendMessage(ctx, &telego.SendMessageParams{
+		ChatID: telego.ChatID{ID: chatID},
+		Text: fmt.Sprintf("🧪 TEST BROADCAST\n\n%s\n\n— @%s Admin", 
+			message, 
+			mainBot.Username),
+	})
+
+	if err != nil {
+		b.sendText(ctx, chatID, fmt.Sprintf("❌ Test broadcast failed: %v", err))
+		return
+	}
+
+	b.sendMarkdown(ctx, chatID, fmt.Sprintf(
+		"✅ *Test Broadcast Sent*\n\n"+
+			"📝 Message sent to you only:\n%s\n\n"+
+			"📊 If the test looks good, click the confirm button above.",
+		escapeMarkdown(message),
+	))
+}
+
+// getTotalUsers - Get total number of users
 func (b *Bot) getTotalUsers() int64 {
 	var count int64
 	b.db.Model(&models.User{}).Where("is_bot = ?", false).Count(&count)
@@ -177,7 +252,6 @@ func (b *Bot) getTotalUsers() int64 {
 
 // executeBroadcastThroughMainBot - Send broadcast through main bot
 func (b *Bot) executeBroadcastThroughMainBot(ctx context.Context, adminChatID int64, message string) {
-	// Get all users from database (excluding bots)
 	var users []models.User
 	if err := b.db.Where("is_bot = ?", false).Find(&users).Error; err != nil {
 		b.sendText(ctx, adminChatID, fmt.Sprintf("❌ Failed to fetch users: %v", err))
@@ -190,21 +264,18 @@ func (b *Bot) executeBroadcastThroughMainBot(ctx context.Context, adminChatID in
 		return
 	}
 
-	// Create main bot API using main bot token
 	mainBotAPI, err := telego.NewBot(b.cfg.BotToken)
 	if err != nil {
 		b.sendText(ctx, adminChatID, fmt.Sprintf("❌ Failed to initialize main bot: %v", err))
 		return
 	}
 
-	// Get main bot info
 	mainBot, err := mainBotAPI.GetMe(ctx)
 	if err != nil {
 		b.sendText(ctx, adminChatID, fmt.Sprintf("❌ Failed to get main bot info: %v", err))
 		return
 	}
 
-	// Send initial progress
 	progressMsg := b.sendMarkdownReturn(ctx, adminChatID, fmt.Sprintf(
 		"📢 *Broadcast in Progress*\n\n"+
 			"👥 Total Users: %d\n"+
@@ -218,15 +289,12 @@ func (b *Bot) executeBroadcastThroughMainBot(ctx context.Context, adminChatID in
 	failCount := 0
 	var failedUsers []int64
 
-	// Send to each user through main bot
 	for i, user := range users {
-		// Send through main bot - using plain text to avoid Markdown errors
 		_, err := mainBotAPI.SendMessage(ctx, &telego.SendMessageParams{
 			ChatID: telego.ChatID{ID: user.TelegramID},
 			Text: fmt.Sprintf("📢 ANNOUNCEMENT\n\n%s\n\n— @%s Admin", 
 				message, 
 				mainBot.Username),
-			// No ParseMode to avoid Markdown errors
 		})
 
 		if err != nil {
@@ -237,7 +305,6 @@ func (b *Bot) executeBroadcastThroughMainBot(ctx context.Context, adminChatID in
 			successCount++
 		}
 
-		// Update progress every 10 users
 		if i%10 == 0 && i > 0 {
 			b.editMarkdown(ctx, adminChatID, progressMsg, fmt.Sprintf(
 				"📢 *Broadcast in Progress*\n\n"+
@@ -252,13 +319,11 @@ func (b *Bot) executeBroadcastThroughMainBot(ctx context.Context, adminChatID in
 			))
 		}
 
-		// Rate limit - send 10 messages per second
 		if i%10 == 0 {
 			time.Sleep(100 * time.Millisecond)
 		}
 	}
 
-	// Send completion report
 	report := fmt.Sprintf(
 		"📢 *Broadcast Complete*\n\n"+
 			"📊 *Summary:*\n"+
@@ -283,7 +348,6 @@ func (b *Bot) executeBroadcastThroughMainBot(ctx context.Context, adminChatID in
 
 	b.editMarkdown(ctx, adminChatID, progressMsg, report)
 
-	// Log broadcast action
 	b.logAdminAction(ctx, adminChatID, "broadcast", 0, "system",
 		fmt.Sprintf("Sent broadcast to %d users (%d failed)", successCount, failCount))
 }
@@ -324,3 +388,27 @@ func (b *Bot) editMarkdown(ctx context.Context, chatID int64, msg *telego.Messag
 	}
 }
 
+// escapeMarkdown - Escape special characters for Markdown
+func escapeMarkdown(text string) string {
+	replacer := strings.NewReplacer(
+		"_", "\\_",
+		"*", "\\*",
+		"[", "\\[",
+		"]", "\\]",
+		"(", "\\(",
+		")", "\\)",
+		"~", "\\~",
+		"`", "\\`",
+		">", "\\>",
+		"#", "\\#",
+		"+", "\\+",
+		"-", "\\-",
+		"=", "\\=",
+		"|", "\\|",
+		"{", "\\{",
+		"}", "\\}",
+		".", "\\.",
+		"!", "\\!",
+	)
+	return replacer.Replace(text)
+}

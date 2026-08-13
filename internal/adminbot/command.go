@@ -31,6 +31,28 @@ func (b *Bot) handleMessage(ctx context.Context, msg *telego.Message) {
 	}
     // Log admin action
     log.Printf("📋 Admin %d (%s): %s", user.ID, user.Username, text)
+    	// ✅ Check if we're waiting for broadcast message
+	if state, ok := b.tempState.Load(chatID); ok {
+		stateStr := state.(string)
+		
+		if stateStr == "awaiting_broadcast_message" {
+			b.tempState.Delete(chatID)
+			b.handleBroadcastMessageInput(ctx, chatID, text)
+			return
+		}
+		
+		if stateStr == "awaiting_broadcast_edit" {
+			b.tempState.Delete(chatID)
+			b.handleBroadcastEditInput(ctx, chatID, text)
+			return
+		}
+		
+		// Other temp states...
+		if stateStr == "awaiting_bot_count" {
+			b.handleBotCountInput(ctx, chatID, text)
+			return
+		}
+	}
 
     // Commands
     if strings.HasPrefix(text, "/") {

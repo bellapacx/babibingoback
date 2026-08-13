@@ -526,6 +526,8 @@ func (b *Bot) handleStatsCallback(ctx context.Context, chatID int64, data string
 // ============ BROADCAST CALLBACK HANDLERS ============
 
 // handleBroadcastCallbacks - Handle broadcast callbacks
+// handleBroadcastCallbacks - Handle broadcast callbacks
+// handleBroadcastCallbacks - Handle broadcast callbacks
 func (b *Bot) handleBroadcastCallbacks(ctx context.Context, query *telego.CallbackQuery) {
 	data := query.Data
 	chatID := query.Message.GetChat().ID
@@ -538,11 +540,18 @@ func (b *Bot) handleBroadcastCallbacks(ctx context.Context, query *telego.Callba
 	case "broadcast_confirm":
 		b.handleBroadcastConfirm(ctx, chatID)
 		
-	case "broadcast_cancel":
-		b.tempState.Delete(chatID)
-		b.sendText(ctx, chatID, "❌ Broadcast cancelled.")
+	case "broadcast_test":
+		b.handleBroadcastTest(ctx, chatID)
+		
 	case "broadcast_send":
 		b.handleBroadcastSend(ctx, chatID)
+		
+	case "broadcast_edit":
+		b.handleBroadcastEdit(ctx, chatID)
+		
+	case "broadcast_cancel":
+		b.handleBroadcastCancel(ctx, chatID)
+		
 	default:
 		b.sendText(ctx, chatID, "❌ Unknown broadcast action.")
 	}
