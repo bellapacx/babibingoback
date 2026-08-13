@@ -388,27 +388,3 @@ func (b *Bot) editMarkdown(ctx context.Context, chatID int64, msg *telego.Messag
 	}
 }
 
-// escapeMarkdown - Escape special characters for Markdown
-func escapeMarkdown(text string) string {
-	replacer := strings.NewReplacer(
-		"_", "\\_",
-		"*", "\\*",
-		"[", "\\[",
-		"]", "\\]",
-		"(", "\\(",
-		")", "\\)",
-		"~", "\\~",
-		"`", "\\`",
-		">", "\\>",
-		"#", "\\#",
-		"+", "\\+",
-		"-", "\\-",
-		"=", "\\=",
-		"|", "\\|",
-		"{", "\\{",
-		"}", "\\}",
-		".", "\\.",
-		"!", "\\!",
-	)
-	return replacer.Replace(text)
-}
