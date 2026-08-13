@@ -38,7 +38,7 @@ func (b *Bot) handleBroadcast(ctx context.Context, chatID int64, args []string) 
 		return
 	}
 
-	// ✅ Check for test mode
+	// Check for test mode
 	if args[0] == "test" {
 		if len(args) < 2 {
 			b.sendText(ctx, chatID, "❌ Please provide a test message.\n\nExample: `/broadcast test Hello!`")
@@ -59,9 +59,9 @@ func (b *Bot) handleBroadcast(ctx context.Context, chatID int64, args []string) 
 			"Type `/broadcast confirm` to send or `/broadcast cancel` to cancel.\n\n"+
 			"📊 Total Users: %d\n\n"+
 			"🧪 To test first: `/broadcast test %s`",
-		message,
+		escapeMarkdown(message),
 		b.getTotalUsers(),
-		message,
+		escapeMarkdown(message),
 	)
 
 	b.sendMarkdown(ctx, chatID, previewText)
@@ -84,11 +84,13 @@ func (b *Bot) sendTestBroadcast(ctx context.Context, chatID int64, message strin
 		return
 	}
 
-	// Send test message to the admin only
+	// Send test message to the admin only - using plain text to avoid parsing issues
 	_, err = mainBotAPI.SendMessage(ctx, &telego.SendMessageParams{
-		ChatID:    telego.ChatID{ID: chatID},
-		Text:      fmt.Sprintf("🧪 *TEST BROADCAST*\n\n%s\n\n— @%s Admin", message, mainBot.Username),
-		ParseMode: "Markdown",
+		ChatID: telego.ChatID{ID: chatID},
+		Text: fmt.Sprintf("🧪 TEST BROADCAST\n\n%s\n\n— @%s Admin", 
+			message, 
+			mainBot.Username),
+		// No ParseMode to avoid Markdown errors
 	})
 
 	if err != nil {
@@ -101,7 +103,7 @@ func (b *Bot) sendTestBroadcast(ctx context.Context, chatID int64, message strin
 			"📝 Message sent to you only:\n%s\n\n"+
 			"📊 If the test looks good, send the broadcast to all users:\n"+
 			"`/broadcast confirm`",
-		message,
+		escapeMarkdown(message),
 	))
 }
 
@@ -130,7 +132,7 @@ func (b *Bot) handleBroadcastConfirm(ctx context.Context, chatID int64) {
 			"📝 Message:\n%s\n\n"+
 			"Type `/broadcast send` to confirm and send, or `/broadcast cancel` to cancel.",
 		totalUsers,
-		message,
+		escapeMarkdown(message),
 	))
 	b.tempState.Store(chatID, fmt.Sprintf("broadcast_ready_%s", message))
 }
@@ -157,7 +159,7 @@ func (b *Bot) handleBroadcastSend(ctx context.Context, chatID int64) {
 		"📢 *Broadcast Started*\n\n"+
 			"⏳ Sending message to all users...\n\n"+
 			"📝 Message:\n%s",
-		message,
+		escapeMarkdown(message),
 	))
 
 	// Send broadcast in background
@@ -218,11 +220,13 @@ func (b *Bot) executeBroadcastThroughMainBot(ctx context.Context, adminChatID in
 
 	// Send to each user through main bot
 	for i, user := range users {
-		// Send through main bot
+		// Send through main bot - using plain text to avoid Markdown errors
 		_, err := mainBotAPI.SendMessage(ctx, &telego.SendMessageParams{
-			ChatID:    telego.ChatID{ID: user.TelegramID},
-			Text:      fmt.Sprintf("📢 *Announcement*\n\n%s\n\n— @%s Admin", message, mainBot.Username),
-			ParseMode: "Markdown",
+			ChatID: telego.ChatID{ID: user.TelegramID},
+			Text: fmt.Sprintf("📢 ANNOUNCEMENT\n\n%s\n\n— @%s Admin", 
+				message, 
+				mainBot.Username),
+			// No ParseMode to avoid Markdown errors
 		})
 
 		if err != nil {
@@ -319,3 +323,4 @@ func (b *Bot) editMarkdown(ctx context.Context, chatID int64, msg *telego.Messag
 		log.Printf("Failed to edit message: %v", err)
 	}
 }
+

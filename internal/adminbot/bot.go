@@ -140,6 +140,7 @@ func (b *Bot) setupCommands(ctx context.Context) error {
 		{Command: "users", Description: "👤 Manage users"},
 		{Command: "stats", Description: "📈 View statistics"},
 		{Command: "settings", Description: "⚙️ Bot settings"},
+		{Command: "broadcast", Description: "📢 Send broadcast to all users"}, 
 	}
 
 	err := b.api.SetMyCommands(ctx, &telego.SetMyCommandsParams{
