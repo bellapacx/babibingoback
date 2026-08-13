@@ -270,11 +270,7 @@ func (b *Bot) executeBroadcastThroughMainBot(ctx context.Context, adminChatID in
 		return
 	}
 
-	mainBot, err := mainBotAPI.GetMe(ctx)
-	if err != nil {
-		b.sendText(ctx, adminChatID, fmt.Sprintf("❌ Failed to get main bot info: %v", err))
-		return
-	}
+	
 
 	progressMsg := b.sendMarkdownReturn(ctx, adminChatID, fmt.Sprintf(
 		"📢 *Broadcast in Progress*\n\n"+
@@ -290,12 +286,11 @@ func (b *Bot) executeBroadcastThroughMainBot(ctx context.Context, adminChatID in
 	var failedUsers []int64
 
 	for i, user := range users {
-		_, err := mainBotAPI.SendMessage(ctx, &telego.SendMessageParams{
-			ChatID: telego.ChatID{ID: user.TelegramID},
-			Text: fmt.Sprintf("📢 ANNOUNCEMENT\n\n%s\n\n— @%s Admin", 
-				message, 
-				mainBot.Username),
-		})
+		// NEW (Keep this):
+_, err := mainBotAPI.SendMessage(ctx, &telego.SendMessageParams{
+    ChatID: telego.ChatID{ID: user.TelegramID},
+    Text: message,
+})
 
 		if err != nil {
 			failCount++
