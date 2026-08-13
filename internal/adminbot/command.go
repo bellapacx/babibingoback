@@ -75,7 +75,12 @@ func (b *Bot) handleCommand(ctx context.Context, chatID int64, user *telego.User
         b.handleUsers(ctx, chatID, args)
     case "stats":
         b.handleStats(ctx, chatID, args)
-    
+    case "broadcast":
+		b.handleBroadcast(ctx, chatID, args)
+    case "broadcast_confirm":
+		b.handleBroadcastConfirm(ctx, chatID)
+    case "broadcast_send":  // ✅ NEW
+		b.handleBroadcastSend(ctx, chatID)
     case "settings":
         b.handleSettings(ctx, chatID, args)
     default:

@@ -30,6 +30,10 @@ func (b *Bot) sendAdminMenu(ctx context.Context, chatID int64) {
                     {Text: "👤 Users", CallbackData: "menu_users"},
                 },
                 {
+			{Text: "📢 Broadcast", CallbackData: "menu_broadcast"},
+			{Text: "📊 Stats", CallbackData: "menu_stats"},
+		},
+                {
                     {Text: "📊 Stats", CallbackData: "menu_stats"},
                     {Text: "⚙️ Settings", CallbackData: "menu_settings"},
                 },

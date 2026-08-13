@@ -71,7 +71,11 @@ func (b *Bot) handleCallback(ctx context.Context, callback *telego.CallbackQuery
 		b.handleGamesCallback(ctx, chatID, data)
 		return
 	}
-
+    // ✅ BROADCAST callbacks - ADD THIS SECTION
+	if strings.HasPrefix(data, "broadcast_") {
+		b.handleBroadcastCallbacks(ctx, callback)
+		return
+	}
 	// ✅ Bots menu navigation
 	if strings.HasPrefix(data, "bots_") {
 		b.handleBotsCallback(ctx, chatID, data)
@@ -146,6 +150,17 @@ func (b *Bot) handleMenuNavigation(ctx context.Context, chatID int64, data strin
 		b.handleStats(ctx, chatID, []string{})
 	case "menu_settings":
 		b.handleSettings(ctx, chatID, []string{})
+	case "menu_broadcast":  // ✅ ADD THIS
+		b.sendMarkdown(ctx, chatID,
+			"📢 *Broadcast System*\n\n"+
+				"Send a message to ALL main bot users.\n\n"+
+				"Usage: `/broadcast <message>`\n\n"+
+				"📌 Examples:\n"+
+				"• `/broadcast 🎉 Special promotion!`\n"+
+				"• `/broadcast 📢 System maintenance at 2 AM`\n\n"+
+				"⚠️ *Important:*\n"+
+				"• Message will be sent to ALL users\n"+
+				"• You will receive a confirmation report")
 	default:
 		b.sendText(ctx, chatID, "❌ Unknown menu option.")
 	}
@@ -507,4 +522,28 @@ func (b *Bot) handleStatsCallback(ctx context.Context, chatID int64, data string
     default:
         b.showStatsMenu(ctx, chatID)
     }
+}
+// ============ BROADCAST CALLBACK HANDLERS ============
+
+// handleBroadcastCallbacks - Handle broadcast callbacks
+func (b *Bot) handleBroadcastCallbacks(ctx context.Context, query *telego.CallbackQuery) {
+	data := query.Data
+	chatID := query.Message.GetChat().ID
+
+	b.api.AnswerCallbackQuery(ctx, &telego.AnswerCallbackQueryParams{
+		CallbackQueryID: query.ID,
+	})
+
+	switch data {
+	case "broadcast_confirm":
+		b.handleBroadcastConfirm(ctx, chatID)
+		
+	case "broadcast_cancel":
+		b.tempState.Delete(chatID)
+		b.sendText(ctx, chatID, "❌ Broadcast cancelled.")
+	case "broadcast_send":
+		b.handleBroadcastSend(ctx, chatID)
+	default:
+		b.sendText(ctx, chatID, "❌ Unknown broadcast action.")
+	}
 }
